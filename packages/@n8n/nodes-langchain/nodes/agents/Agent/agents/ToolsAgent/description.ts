@@ -47,6 +47,13 @@ export const toolsAgentProperties: INodeProperties[] = [
 				description:
 					'Whether or not binary images should be automatically passed through to the agent as image type messages',
 			},
+			{
+				displayName: 'Notify',
+				name: 'notify',
+				type: 'boolean',
+				default: false,
+				description: 'Whether or not the agent should notify the user when it takes an action',
+			},
 		],
 	},
 ];

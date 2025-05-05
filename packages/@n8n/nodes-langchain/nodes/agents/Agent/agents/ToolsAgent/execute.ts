@@ -404,6 +404,7 @@ export async function toolsAgentExecute(this: IExecuteFunctions): Promise<INodeE
 	this.logger.debug('Executing Tools Agent');
 
 	const returnData: INodeExecutionData[] = [];
+	let output: string | object;
 	const items = this.getInputData();
 	const outputParser = await getOptionalOutputParser(this);
 	const tools = await getTools(this, outputParser);
@@ -422,12 +423,14 @@ export async function toolsAgentExecute(this: IExecuteFunctions): Promise<INodeE
 			if (input === undefined) {
 				throw new NodeOperationError(this.getNode(), 'The “text” parameter is empty.');
 			}
+			const sseAddress = this.getNodeParameter('sseAddressKey', itemIndex) as string;
 
 			const options = this.getNodeParameter('options', itemIndex, {}) as {
 				systemMessage?: string;
 				maxIterations?: number;
 				returnIntermediateSteps?: boolean;
 				passthroughBinaryImages?: boolean;
+				notify?: boolean;
 			};
 
 			// Prepare the prompt messages and prompt template.
@@ -461,37 +464,78 @@ export async function toolsAgentExecute(this: IExecuteFunctions): Promise<INodeE
 			});
 
 			// Invoke the executor with the given input and system message.
-			const response = await executor.invoke(
+			// const response = await executor.invoke(
+			// 	{
+			// 		input,
+			// 		system_message: options.systemMessage ?? SYSTEM_MESSAGE,
+			// 		formatting_instructions:
+			// 			'IMPORTANT: For your response to user, you MUST use the `format_final_json_response` tool with your complete answer formatted according to the required schema. Do not attempt to format the JSON manually - always use this tool. Your response will be rejected if it is not properly formatted through this tool. Only use this tool once you are ready to provide your final answer.',
+			// 	},
+			// 	{ signal: this.getExecutionCancelSignal() },
+			// );
+			// console.log('response', response);
+			const eventStream = executor.streamEvents(
 				{
 					input,
 					system_message: options.systemMessage ?? SYSTEM_MESSAGE,
 					formatting_instructions:
 						'IMPORTANT: For your response to user, you MUST use the `format_final_json_response` tool with your complete answer formatted according to the required schema. Do not attempt to format the JSON manually - always use this tool. Your response will be rejected if it is not properly formatted through this tool. Only use this tool once you are ready to provide your final answer.',
 				},
-				{ signal: this.getExecutionCancelSignal() },
+				{
+					version: 'v2',
+				},
 			);
+			for await (const event of eventStream) {
+				// console.log(event);
+				if (options.notify === true && event.event !== 'on_chat_model_stream') {
+					// Post SSE event if notify is true
+					if (sseAddress) {
+						console.log('sseAddress', sseAddress);
+						const url = new URL(sseAddress);
+						console.log('url', url);
+
+						const controller = new AbortController();
+						const timeout = setTimeout(() => {
+							controller.abort();
+							console.error('Fetch request timed out');
+						}, 10000); // 10 seconds timeout
+
+						try {
+							const response = await fetch(url, {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify(event),
+								signal: controller.signal,
+							});
+							clearTimeout(timeout);
+							console.log('event sent', response);
+						} catch (error) {
+							clearTimeout(timeout);
+							if (error.name === 'AbortError') {
+								console.error('Fetch aborted due to timeout');
+							} else {
+								console.error('Fetch error:', error);
+							}
+						}
+					}
+				}
+
+				if (event.event === 'on_chain_end') {
+					output = (event.data.output as string) || '';
+					const itemResult = {
+						json: {
+							output,
+						},
+					};
+					returnData.push(itemResult);
+				}
+			}
 
 			// If memory and outputParser are connected, parse the output.
 			if (memory && outputParser) {
-				const parsedOutput = jsonParse<{ output: Record<string, unknown> }>(
-					response.output as string,
-				);
-				response.output = parsedOutput?.output ?? parsedOutput;
+				const parsedOutput = jsonParse<{ output: Record<string, unknown> }>(output as string);
+				output = parsedOutput?.output ?? parsedOutput;
 			}
-
-			// Omit internal keys before returning the result.
-			const itemResult = {
-				json: omit(
-					response,
-					'system_message',
-					'formatting_instructions',
-					'input',
-					'chat_history',
-					'agent_scratchpad',
-				),
-			};
-
-			returnData.push(itemResult);
 		} catch (error) {
 			if (this.continueOnFail()) {
 				returnData.push({
@@ -504,5 +548,6 @@ export async function toolsAgentExecute(this: IExecuteFunctions): Promise<INodeE
 		}
 	}
 
+	console.log('returnData', returnData);
 	return [returnData];
 }
