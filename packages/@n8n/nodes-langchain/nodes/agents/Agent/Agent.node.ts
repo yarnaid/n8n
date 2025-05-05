@@ -24,6 +24,8 @@ import { sqlAgentAgentProperties } from './agents/SqlAgent/description';
 import { sqlAgentAgentExecute } from './agents/SqlAgent/execute';
 import { toolsAgentProperties } from './agents/ToolsAgent/description';
 import { toolsAgentExecute } from './agents/ToolsAgent/execute';
+import { toolsAgentNotifyProperties } from './agents/ToolsAgentNotify/description';
+import { toolsAgentNotifyExecute } from './agents/ToolsAgentNotify/execute';
 
 // Function used in the inputs expression to figure out which inputs to
 // display based on the agent type
@@ -34,7 +36,8 @@ function getInputs(
 		| 'openAiFunctionsAgent'
 		| 'planAndExecuteAgent'
 		| 'reActAgent'
-		| 'sqlAgent',
+		| 'sqlAgent'
+		| 'toolsAgentNotify',
 	hasOutputParser?: boolean,
 ): Array<NodeConnectionType | INodeInputConfiguration> {
 	interface SpecialInput {
@@ -201,6 +204,21 @@ function getInputs(
 				type: 'ai_outputParser',
 			},
 		];
+	} else if (agent === 'toolsAgentNotify') {
+		specialInputs = [
+			{
+				type: 'ai_languageModel',
+			},
+			{
+				type: 'ai_memory',
+			},
+			{
+				type: 'ai_tool',
+			},
+			{
+				type: 'ai_outputParser',
+			},
+		];
 	}
 
 	if (hasOutputParser === false) {
@@ -217,6 +235,12 @@ const agentTypeProperty: INodeProperties = {
 	// eslint-disable-next-line n8n-nodes-base/node-param-options-type-unsorted-items
 	options: [
 		{
+			name: 'Tools Agent Notify',
+			value: 'toolsAgentNotify',
+			description:
+				'Utilizes structured tool schemas for precise and reliable tool selection and execution. Recommended for complex tasks requiring accurate and consistent tool usage, but only usable with models that support tool calling.',
+		},
+		{
 			name: 'Tools Agent',
 			value: 'toolsAgent',
 			description:
@@ -226,31 +250,31 @@ const agentTypeProperty: INodeProperties = {
 			name: 'Conversational Agent',
 			value: 'conversationalAgent',
 			description:
-				'Describes tools in the system prompt and parses JSON responses for tool calls. More flexible but potentially less reliable than the Tools Agent. Suitable for simpler interactions or with models not supporting structured schemas.',
+				'[DEPRECATED] Describes tools in the system prompt and parses JSON responses for tool calls. More flexible but potentially less reliable than the Tools Agent. Suitable for simpler interactions or with models not supporting structured schemas.',
 		},
 		{
 			name: 'OpenAI Functions Agent',
 			value: 'openAiFunctionsAgent',
 			description:
-				"Leverages OpenAI's function calling capabilities to precisely select and execute tools. Excellent for tasks requiring structured outputs when working with OpenAI models.",
+				"[DEPRECATED] Leverages OpenAI's function calling capabilities to precisely select and execute tools. Excellent for tasks requiring structured outputs when working with OpenAI models.",
 		},
 		{
 			name: 'Plan and Execute Agent',
 			value: 'planAndExecuteAgent',
 			description:
-				'Creates a high-level plan for complex tasks and then executes each step. Suitable for multi-stage problems or when a strategic approach is needed.',
+				'[DEPRECATED] Creates a high-level plan for complex tasks and then executes each step. Suitable for multi-stage problems or when a strategic approach is needed.',
 		},
 		{
 			name: 'ReAct Agent',
 			value: 'reActAgent',
 			description:
-				'Combines reasoning and action in an iterative process. Effective for tasks that require careful analysis and step-by-step problem-solving.',
+				'[DEPRECATED] Combines reasoning and action in an iterative process. Effective for tasks that require careful analysis and step-by-step problem-solving.',
 		},
 		{
 			name: 'SQL Agent',
 			value: 'sqlAgent',
 			description:
-				'Specializes in interacting with SQL databases. Ideal for data analysis tasks, generating queries, or extracting insights from structured data.',
+				'[DEPRECATED] Specializes in interacting with SQL databases. Ideal for data analysis tasks, generating queries, or extracting insights from structured data.',
 		},
 	],
 	default: '',
@@ -266,7 +290,7 @@ export class Agent implements INodeType {
 		version: [1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9],
 		description: 'Generates an action plan and executes it. Can use external tools.',
 		subtitle:
-			"={{ {	toolsAgent: 'Tools Agent', conversationalAgent: 'Conversational Agent', openAiFunctionsAgent: 'OpenAI Functions Agent', reActAgent: 'ReAct Agent', sqlAgent: 'SQL Agent', planAndExecuteAgent: 'Plan and Execute Agent' }[$parameter.agent] }}",
+			"={{ {	toolsAgent: 'Tools Agent', conversationalAgent: 'Conversational Agent', openAiFunctionsAgent: 'OpenAI Functions Agent', reActAgent: 'ReAct Agent', sqlAgent: 'SQL Agent', planAndExecuteAgent: 'Plan and Execute Agent', toolsAgentNotify: 'Tools Agent Notify' }[$parameter.agent] }}",
 		defaults: {
 			name: 'AI Agent',
 			color: '#404040',
@@ -365,7 +389,7 @@ export class Agent implements INodeType {
 			// Make Tools Agent the only agent option for versions 1.8 and above
 			{
 				...agentTypeProperty,
-				type: 'hidden',
+				type: 'options',
 				displayOptions: { show: { '@version': [{ _cnd: { gte: 1.8 } }] } },
 				default: 'toolsAgent',
 			},
@@ -449,7 +473,7 @@ export class Agent implements INodeType {
 				default: '',
 				displayOptions: {
 					show: {
-						agent: ['toolsAgent'],
+						agent: ['toolsAgentNotify'],
 					},
 				},
 			},
@@ -460,6 +484,7 @@ export class Agent implements INodeType {
 			...reActAgentAgentProperties,
 			...sqlAgentAgentProperties,
 			...planAndExecuteAgentProperties,
+			...toolsAgentNotifyProperties,
 		],
 	};
 
@@ -479,6 +504,8 @@ export class Agent implements INodeType {
 			return await sqlAgentAgentExecute.call(this);
 		} else if (agentType === 'planAndExecuteAgent') {
 			return await planAndExecuteAgentExecute.call(this, nodeVersion);
+		} else if (agentType === 'toolsAgentNotify') {
+			return await toolsAgentNotifyExecute.call(this);
 		}
 
 		throw new NodeOperationError(this.getNode(), `The agent type "${agentType}" is not supported`);

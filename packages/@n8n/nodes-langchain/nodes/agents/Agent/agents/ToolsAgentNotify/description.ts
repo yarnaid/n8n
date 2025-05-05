@@ -2,14 +2,14 @@ import type { INodeProperties } from 'n8n-workflow';
 
 import { SYSTEM_MESSAGE } from './prompt';
 
-export const toolsAgentProperties: INodeProperties[] = [
+export const toolsAgentNotifyProperties: INodeProperties[] = [
 	{
 		displayName: 'Options',
 		name: 'options',
 		type: 'collection',
 		displayOptions: {
 			show: {
-				agent: ['toolsAgent'],
+				agent: ['toolsAgentNotify'],
 			},
 		},
 		default: {},
@@ -46,6 +46,13 @@ export const toolsAgentProperties: INodeProperties[] = [
 				default: true,
 				description:
 					'Whether or not binary images should be automatically passed through to the agent as image type messages',
+			},
+			{
+				displayName: 'Notify',
+				name: 'notify',
+				type: 'boolean',
+				default: false,
+				description: 'Whether or not the agent should notify the user when it takes an action',
 			},
 		],
 	},
