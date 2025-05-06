@@ -1,4 +1,5 @@
 import type { BaseChatMemory } from '@langchain/community/memory/chat_memory';
+import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -15,6 +16,8 @@ import { BINARY_ENCODING, jsonParse, NodeConnectionTypes, NodeOperationError } f
 import type { IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 import type { ZodObject } from 'zod';
 import { z } from 'zod';
+import { Serialized } from '@langchain/core/load/serializable';
+import { ChainValues } from '@langchain/core/utils/types';
 
 import { isChatInstance, getPromptInputByType, getConnectedTools } from '@utils/helpers';
 import {
@@ -400,13 +403,149 @@ export function preparePrompt(messages: BaseMessagePromptTemplateLike[]): ChatPr
  *
  * @returns The array of execution data for all processed items
  */
+// Add this class at the beginning of the file, after imports
+class NotificationCallbackHandler extends BaseCallbackHandler {
+	name = 'notification';
+
+	private isFirstLLMCall = true;
+	private notificationUrl: string;
+	private sessionId: string;
+	private messageId: string;
+	private workflowName: string;
+	private firstLLMNotificationMessage: string;
+	private llmNotificationMessage: string;
+	private toolNotificationMessage: string;
+
+	constructor(
+		notificationUrl: string,
+		sessionId: string,
+		messageId: string,
+		workflowName: string,
+		firstLLMNotificationMessage: string,
+		llmNotificationMessage: string,
+		toolNotificationMessage: string,
+	) {
+		super();
+		this.notificationUrl = notificationUrl;
+		this.sessionId = sessionId;
+		this.messageId = messageId;
+		this.workflowName = workflowName;
+		this.firstLLMNotificationMessage = firstLLMNotificationMessage;
+		this.llmNotificationMessage = llmNotificationMessage;
+		this.toolNotificationMessage = toolNotificationMessage;
+	}
+
+	async handleChainStart(
+		chain: Serialized,
+		inputs: ChainValues,
+		runId: string,
+		parentRunId?: string,
+		tags?: string[],
+		metadata?: Record<string, unknown>,
+		runName?: string,
+	) {
+		// console.log('Chain Start:', { chain, inputs, runId, parentRunId, tags, metadata, runName });
+		if (this.notificationUrl) {
+			await this.sendNotification('on_chat_model_start', chain.name || 'Chain');
+		}
+	}
+
+	async handleChainEnd(
+		outputs: ChainValues,
+		runId: string,
+		parentRunId?: string,
+		tags?: string[],
+		metadata?: Record<string, unknown>,
+		runName?: string,
+	) {
+		// console.log('Chain End:', { outputs, runId, parentRunId, tags, metadata, runName });
+		if (this.notificationUrl) {
+			await this.sendNotification('on_chat_model_end', outputs?.name || 'Chain');
+		}
+	}
+
+	async handleAgentAction(
+		action: AgentAction,
+		runId: string,
+		parentRunId?: string,
+		tags?: string[],
+	) {
+		// console.log('Agent Action:', { action, runId, parentRunId, tags });
+		if (this.notificationUrl) {
+			await this.sendNotification('on_tool_start', action.tool);
+		}
+	}
+
+	private async sendNotification(eventName: string, name: string) {
+		const url = new URL(this.notificationUrl);
+		const controller = new AbortController();
+		const timeout = setTimeout(() => {
+			controller.abort();
+			console.error('Fetch request timed out');
+		}, 10000); // 10 seconds timeout
+
+		try {
+			// Determine which message to use based on event type and if custom message is provided
+			let responseText = `calling ${name}`;
+
+			if (eventName === 'on_chat_model_start' || eventName === 'on_chat_model_end') {
+				// For LLM calls
+				if (
+					this.isFirstLLMCall &&
+					this.firstLLMNotificationMessage &&
+					this.firstLLMNotificationMessage.trim() !== '' &&
+					eventName === 'on_chat_model_start'
+				) {
+					// Use firstLLMNotificationMessage only for the first LLM call start
+					responseText = this.firstLLMNotificationMessage.replace(/{{name}}/g, name);
+					this.isFirstLLMCall = false; // Mark that we've used the first LLM call message
+				} else if (this.llmNotificationMessage && this.llmNotificationMessage.trim() !== '') {
+					// Use llmNotificationMessage for subsequent LLM calls (both start and end)
+					responseText = this.llmNotificationMessage.replace(/{{name}}/g, name);
+				}
+				// Mark that we've processed an LLM call if it's a start event
+				if (eventName === 'on_chat_model_start') {
+					this.isFirstLLMCall = false;
+				}
+			} else if (eventName === 'on_tool_start') {
+				// For tool calls
+				if (this.toolNotificationMessage && this.toolNotificationMessage.trim() !== '') {
+					responseText = this.toolNotificationMessage.replace(/{{name}}/g, name);
+				}
+			}
+
+			const payload = {
+				sessionId: this.sessionId,
+				messageId: this.messageId,
+				workflowName: this.workflowName,
+				eventName,
+				response: responseText,
+			};
+
+			await fetch(url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload),
+				signal: controller.signal,
+			});
+			clearTimeout(timeout);
+		} catch (error) {
+			clearTimeout(timeout);
+			if (error.name === 'AbortError') {
+				console.error('Fetch aborted due to timeout');
+			} else {
+				console.error('Fetch error:', error);
+			}
+		}
+	}
+}
+
 export async function toolsAgentNotifyExecute(
 	this: IExecuteFunctions,
 ): Promise<INodeExecutionData[][]> {
 	this.logger.debug('Executing Tools Agent');
 
 	const returnData: INodeExecutionData[] = [];
-	let output: object;
 	const items = this.getInputData();
 	const outputParser = await getOptionalOutputParser(this);
 	const tools = await getTools(this, outputParser);
@@ -423,16 +562,15 @@ export async function toolsAgentNotifyExecute(
 				promptTypeKey: 'promptType',
 			});
 			if (input === undefined) {
-				throw new NodeOperationError(this.getNode(), 'The “text” parameter is empty.');
+				throw new NodeOperationError(this.getNode(), 'The "text" parameter is empty.');
 			}
-			const sseAddress = this.getNodeParameter('sseAddressKey', itemIndex) as string;
+			const notificationUrl = this.getNodeParameter('notificationUrl', itemIndex, '') as string;
 
 			const options = this.getNodeParameter('options', itemIndex, {}) as {
 				systemMessage?: string;
 				maxIterations?: number;
 				returnIntermediateSteps?: boolean;
 				passthroughBinaryImages?: boolean;
-				notify?: boolean;
 			};
 
 			// Prepare the prompt messages and prompt template.
@@ -457,94 +595,85 @@ export async function toolsAgentNotifyExecute(
 				getAgentStepsParser(outputParser, memory),
 				fixEmptyContentMessage,
 			]);
+
+			// Create notification callback handler if URL is provided
+			const callbacks = [];
+			if (notificationUrl) {
+				const sessionId = this.getNodeParameter('sessionId', itemIndex, '') as string;
+				const messageId = this.getNodeParameter('messageId', itemIndex, '') as string;
+				const workflowName = this.getNode().name || '';
+
+				// Get custom notification messages from options
+				const firstLLMNotificationMessage = this.getNodeParameter(
+					'options.firstLLMNotificationMessage',
+					itemIndex,
+					'',
+				) as string;
+				const toolNotificationMessage = this.getNodeParameter(
+					'options.toolNotificationMessage',
+					itemIndex,
+					'',
+				) as string;
+				const llmNotificationMessage = this.getNodeParameter(
+					'options.llmNotificationMessage',
+					itemIndex,
+					'',
+				) as string;
+
+				callbacks.push(
+					new NotificationCallbackHandler(
+						notificationUrl,
+						sessionId,
+						messageId,
+						workflowName,
+						firstLLMNotificationMessage,
+						llmNotificationMessage,
+						toolNotificationMessage,
+					),
+				);
+			}
+
 			const executor = AgentExecutor.fromAgentAndTools({
 				agent: runnableAgent,
 				memory,
 				tools,
 				returnIntermediateSteps: options.returnIntermediateSteps === true,
 				maxIterations: options.maxIterations ?? 10,
+				callbacks,
 			});
 
 			// Invoke the executor with the given input and system message.
-			// const response = await executor.invoke(
-			// 	{
-			// 		input,
-			// 		system_message: options.systemMessage ?? SYSTEM_MESSAGE,
-			// 		formatting_instructions:
-			// 			'IMPORTANT: For your response to user, you MUST use the `format_final_json_response` tool with your complete answer formatted according to the required schema. Do not attempt to format the JSON manually - always use this tool. Your response will be rejected if it is not properly formatted through this tool. Only use this tool once you are ready to provide your final answer.',
-			// 	},
-			// 	{ signal: this.getExecutionCancelSignal() },
-			// );
-			// console.log('response', response);
-			const eventStream = executor.streamEvents(
+			const response = await executor.invoke(
 				{
 					input,
 					system_message: options.systemMessage ?? SYSTEM_MESSAGE,
 					formatting_instructions:
 						'IMPORTANT: For your response to user, you MUST use the `format_final_json_response` tool with your complete answer formatted according to the required schema. Do not attempt to format the JSON manually - always use this tool. Your response will be rejected if it is not properly formatted through this tool. Only use this tool once you are ready to provide your final answer.',
 				},
-				{
-					version: 'v2',
-				},
+				{ signal: this.getExecutionCancelSignal() },
 			);
-			for await (const event of eventStream) {
-				// console.log(event);
-				if (
-					options.notify === true &&
-					(event.event === 'on_chat_model_start' || event.event === 'on_tool_start')
-				) {
-					// Post SSE event if notify is true
-					if (sseAddress) {
-						console.log('sseAddress', sseAddress);
-						const url = new URL(sseAddress);
-						console.log('url', url);
-
-						const controller = new AbortController();
-						const timeout = setTimeout(() => {
-							controller.abort();
-							console.error('Fetch request timed out');
-						}, 10000); // 10 seconds timeout
-
-						try {
-							const response = await fetch(url, {
-								method: 'POST',
-								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify(event),
-								signal: controller.signal,
-							});
-							clearTimeout(timeout);
-							console.log('event sent', response);
-						} catch (error) {
-							clearTimeout(timeout);
-							if (error.name === 'AbortError') {
-								console.error('Fetch aborted due to timeout');
-							} else {
-								console.error('Fetch error:', error);
-							}
-						}
-					}
-				}
-
-				if (event.event === 'on_chat_model_end') {
-					console.log('event.data.output', event.data.output);
-					// output = jsonParse<{ output: Record<string, unknown> }>(
-					// event.data.output.toJSON() as string,
-					// );
-					// console.log('event.data.output', event.data.output);
-					const itemResult = {
-						json: {
-							output: event.data.output as object,
-						},
-					};
-					returnData.push(itemResult);
-				}
-			}
 
 			// If memory and outputParser are connected, parse the output.
-			// if (memory && outputParser) {
-			// 	const parsedOutput = jsonParse<{ output: Record<string, unknown> }>(JSON.stringify(output));
-			// 	output = parsedOutput?.output ?? parsedOutput;
-			// }
+			if (memory && outputParser) {
+				const parsedOutput = jsonParse<{ output: Record<string, unknown> }>(
+					response.output as string,
+				);
+				response.output = parsedOutput?.output ?? parsedOutput;
+			}
+
+			// Omit internal keys before returning the result.
+			const itemResult = {
+				json: omit(
+					response,
+					'system_message',
+					'formatting_instructions',
+					'input',
+					'chat_history',
+					'agent_scratchpad',
+				),
+			};
+
+			returnData.push(itemResult);
 		} catch (error) {
 			if (this.continueOnFail()) {
 				returnData.push({
@@ -557,6 +686,5 @@ export async function toolsAgentNotifyExecute(
 		}
 	}
 
-	// console.log('returnData', returnData);
 	return [returnData];
 }

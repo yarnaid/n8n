@@ -466,17 +466,6 @@ export class Agent implements INodeType {
 					},
 				},
 			},
-			{
-				displayName: 'SSE Address Key',
-				name: 'sseAddressKey',
-				type: 'string',
-				default: '',
-				displayOptions: {
-					show: {
-						agent: ['toolsAgentNotify'],
-					},
-				},
-			},
 
 			...toolsAgentProperties,
 			...conversationalAgentProperties,
