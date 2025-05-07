@@ -221,6 +221,17 @@ export abstract class NodeExecutionContext implements Omit<FunctionsBase, 'getCr
 				);
 			}
 
+			// let expressionResolveValues: ICredentialsExpressionResolveValues | undefined;
+			// const creds = await additionalData.credentialsHelper.getDecrypted(
+			// 	additionalData,
+			// 	node.credentials ? node.credentials[type] : ({} as INodeCredentialsDetails),
+			// 	type,
+			// 	mode,
+			// 	executeData,
+			// 	false,
+			// 	expressionResolveValues,
+			// );
+
 			if (
 				!NodeHelpers.displayParameter(
 					// eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing

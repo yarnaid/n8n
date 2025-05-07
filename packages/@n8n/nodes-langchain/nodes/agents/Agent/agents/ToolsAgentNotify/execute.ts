@@ -403,7 +403,6 @@ export function preparePrompt(messages: BaseMessagePromptTemplateLike[]): ChatPr
  *
  * @returns The array of execution data for all processed items
  */
-// Add this class at the beginning of the file, after imports
 class NotificationCallbackHandler extends BaseCallbackHandler {
 	name = 'notification';
 
@@ -411,28 +410,37 @@ class NotificationCallbackHandler extends BaseCallbackHandler {
 	private notificationUrl: string;
 	private sessionId: string;
 	private messageId: string;
+	private nodeName: string;
 	private workflowName: string;
 	private firstLLMNotificationMessage: string;
 	private llmNotificationMessage: string;
 	private toolNotificationMessage: string;
+	private username: string;
+	private password: string;
 
 	constructor(
 		notificationUrl: string,
 		sessionId: string,
 		messageId: string,
+		nodeName: string,
 		workflowName: string,
 		firstLLMNotificationMessage: string,
 		llmNotificationMessage: string,
 		toolNotificationMessage: string,
+		username: string = '', // Added username parameter with default
+		password: string = '', // Added password parameter with default
 	) {
 		super();
 		this.notificationUrl = notificationUrl;
 		this.sessionId = sessionId;
 		this.messageId = messageId;
+		this.nodeName = nodeName;
 		this.workflowName = workflowName;
 		this.firstLLMNotificationMessage = firstLLMNotificationMessage;
 		this.llmNotificationMessage = llmNotificationMessage;
 		this.toolNotificationMessage = toolNotificationMessage;
+		this.username = username; // Store username
+		this.password = password; // Store password
 	}
 
 	async handleChainStart(
@@ -517,14 +525,25 @@ class NotificationCallbackHandler extends BaseCallbackHandler {
 			const payload = {
 				sessionId: this.sessionId,
 				messageId: this.messageId,
+				nodeName: this.nodeName,
 				workflowName: this.workflowName,
 				eventName,
 				response: responseText,
 			};
 
+			// Create headers with content type
+			const headers: HeadersInit = { 'Content-Type': 'application/json' };
+
+			// Add Basic Auth header if credentials are provided
+			if (this.username && this.password) {
+				const authString = `${this.username}:${this.password}`;
+				const base64Auth = Buffer.from(authString).toString('base64');
+				headers.Authorization = `Basic ${base64Auth}`;
+			}
+
 			await fetch(url, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers,
 				body: JSON.stringify(payload),
 				signal: controller.signal,
 			});
@@ -554,6 +573,12 @@ export async function toolsAgentNotifyExecute(
 		try {
 			const model = await getChatModel(this);
 			const memory = await getOptionalMemory(this);
+
+			const credentialsType = this.getNodeParameter('authentication', itemIndex) as string;
+			const creds: { user: string; password: string } = await this.getCredentials(
+				'httpBasicAuth',
+				itemIndex,
+			);
 
 			const input = getPromptInputByType({
 				ctx: this,
@@ -598,10 +623,12 @@ export async function toolsAgentNotifyExecute(
 
 			// Create notification callback handler if URL is provided
 			const callbacks = [];
+			// In the toolsAgentNotifyExecute function
 			if (notificationUrl) {
 				const sessionId = this.getNodeParameter('sessionId', itemIndex, '') as string;
 				const messageId = this.getNodeParameter('messageId', itemIndex, '') as string;
-				const workflowName = this.getNode().name || '';
+				const nodeName = this.getNode().name || '';
+				const workflowName = this.getWorkflow().name ?? ''; // Get workflow name
 
 				// Get custom notification messages from options
 				const firstLLMNotificationMessage = this.getNodeParameter(
@@ -625,10 +652,13 @@ export async function toolsAgentNotifyExecute(
 						notificationUrl,
 						sessionId,
 						messageId,
-						workflowName,
+						nodeName,
+						workflowName, // Pass workflow name to handler
 						firstLLMNotificationMessage,
 						llmNotificationMessage,
 						toolNotificationMessage,
+						creds.user,
+						creds.password,
 					),
 				);
 			}

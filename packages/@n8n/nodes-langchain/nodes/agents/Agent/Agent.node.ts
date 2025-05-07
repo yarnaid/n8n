@@ -319,6 +319,16 @@ export class Agent implements INodeType {
 		credentials: [
 			{
 				// eslint-disable-next-line n8n-nodes-base/node-class-description-credentials-name-unsuffixed
+				name: 'httpBasicAuth',
+				required: true,
+				displayOptions: {
+					show: {
+						agent: ['toolsAgentNotify'],
+					},
+				},
+			},
+			{
+				// eslint-disable-next-line n8n-nodes-base/node-class-description-credentials-name-unsuffixed
 				name: 'mySql',
 				required: true,
 				testedBy: 'mysqlConnectionTest',

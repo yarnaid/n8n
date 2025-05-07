@@ -4,6 +4,25 @@ import { SYSTEM_MESSAGE } from './prompt';
 
 export const toolsAgentNotifyProperties: INodeProperties[] = [
 	{
+		displayName: 'Credentials',
+		name: 'credentials',
+		type: 'credentials',
+		default: '',
+	},
+	{
+		displayName: 'Authentication',
+		name: 'authentication',
+		type: 'credentialsSelect',
+		required: true,
+		default: '',
+		credentialTypes: ['has:genericAuth'],
+		displayOptions: {
+			show: {
+				agent: ['toolsAgentNotify'],
+			},
+		},
+	},
+	{
 		displayName: 'Notification URL',
 		name: 'notificationUrl',
 		type: 'string',
